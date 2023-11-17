@@ -1,0 +1,316 @@
+---
+title: "COPS grant splash page"
+author: "OBI"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, quiet = TRUE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, quiet = TRUE, cache = TRUE)
+
+library(tidyverse)
+library(plotly) # for charts
+library(htmltools) # to scale widgets horizontally
+library(DT) # to show the datatable at the end
+library(segmented)
+
+# change this location to wherever you downloaded the file from
+dfFlat <- read_csv(file = "G:/Projects/COPS2017Grant/flatFileForODP.csv")
+
+```
+
+## Exec Summary
+
+The use of force by law enforcement officers is a subject of great public interest as well as critical importance to law enforcement agencies. From 2018 to 2022, thanks to an award from the Office of Community Oriented Policing Services (COPS Office), the Rochester (New York) Police Department (RPD) and the Rochester Institute of Technology (RIT) collaborated to study the RPD’s use of force incidents. The project’s primary goal was to help the public develop an understanding of RPD uses of force that goes beyond engaging online with viral videos. To ensure the privacy of both officers and other persons involved in RPD uses of force, as well as to distill a large number of incidents into an analysis for the lay public, the researchers aggregated use of force incidents, documented on Subject Resistance Forms (SRRs), into a dataset.
+
+That dataset is now hosted on the RPD Open Data Portal and available for [download](link). This page introduces the dataset and provides example analysis. The R code used to create the plots you see on this page are available [here](link to elsewhere on ODP).
+
+The dataset contains RPD uses of force from July 6th 2016 to June 7th 2021. Each row of the dataset is a single use of force involving a single subject and one or more RPD officers. Incidents in which officers use force against two or more people are documented on two or more SRRs.
+
+Persons interested in learning more about this project can read the official report on the DOJ COPS office website [here](https://portal.cops.usdoj.gov/resourcecenter/Home.aspx?item=cops-r1135).
+
+This page shows some example analyses and visuals that anyone can now do at home with the data hosted by RPD. First, an examination of the data itself, showing what variables are in the dataset, and what types of variables they are:
+
+```{r glimpse}
+
+tableExample <- dfFlat %>% 
+  filter(! if_any(everything(), is.na)) %>%
+  sample_n(2) %>%
+  t() %>% 
+  as_tibble(rownames = "Column Name") %>% 
+  rename("Example 1" = "V1", "Example 2" = "V2") %>% 
+  bind_cols(
+    "Column Type" = sapply(
+      dfFlat, function(X) class(X)[1]) %>% # class of POSIXct gives 2 results in list; just take 1st to make rows line up
+      unlist()
+    ) %>% 
+  dplyr::select(`Column Name`, `Column Type`, `Example 1`, `Example 2`) %>%
+  DT::datatable(
+    options = list(
+      colReorder = TRUE,
+      pageLength = 25,
+      lengthMenu = c(10, 20, 50, 100),
+      bPaginate = FALSE,
+      columnDefs = list(
+        list(
+          className = "dt-right", 
+          targets = "_all")
+        )
+      )
+    )
+
+scaledTableExample <- browsable(div(style = "width:100%", tableExample))
+save_html(html = scaledTableExample, file = "scaledTableExample.html", libdir = "htmlLibs")
+
+tableExample
+
+```
+
+One easy  analysis with this data is to discover the most and least common use of force tactics used by Rochester police officers:
+
+```{r tactics}
+
+# bring out tactics
+# specify DPLYR::select as segmented loads MASS which has its own select()
+tactics <- dfFlat %>% dplyr::select(Filename, TacticsUsed)
+
+# How many tactics used in each event?
+maxTacticsUsed <- tactics %>% 
+  mutate(countOfTactics = str_count(", ", string = TacticsUsed) + 1 ) %>% 
+  count(countOfTactics) %>% 
+  filter(countOfTactics == max(countOfTactics, na.rm = TRUE)) %>%
+  .$countOfTactics
+
+# maxTacticsUsed is 9 so we go up to Tactic9
+tidyTactics <- tactics %>% 
+  separate(
+    col = TacticsUsed, 
+    sep = ", ", 
+    into = paste0("Tactic", 1:maxTacticsUsed)
+    ) %>%
+  pivot_longer(
+    cols = contains("Tactic"), 
+    names_to = "Number", 
+    values_to = "Tactic") %>%
+  filter(! is.na(Tactic) ) %>%
+  mutate(Number = str_remove(Number, "Tactic"))
+
+tacticsPlot <- tidyTactics %>% 
+  count(Tactic, name = "Count") %>% 
+  arrange(desc(Count)) %>% 
+  mutate(Tactic = fct_reorder(Tactic, .x = Count)) %>%
+  plot_ly(
+    type = "bar",
+    x = ~Count,
+    y = ~Tactic
+  ) %>%
+  layout(
+    yaxis = list(
+      title = ""
+    )
+  )
+
+scaledTacticsPlot <- browsable(div(style = "width:100%; height = 200px", tacticsPlot))
+save_html(html = scaledTacticsPlot, file = "scaledTacticsPlot.html", libdir = "htmlLibs")
+
+tacticsPlot
+
+```
+
+The most common tactic listed is "verbal" because almost all use of force incidents begin with an unsuccessful verbal attempt to resolve the situation by an officer; if the initial verbal tactic is successful, there would be no use of force and thus no SRR documentation. "Other" is the next most common tactic; an explanation of the "other" tactic would be written in the narrative.
+
+What types of behavior by subjects do officers record in use of force incidents?
+
+```{r subjectActions}
+
+# some SRR have blank subject actions
+# some likely read errors; some due to prior form (2016, some of 2017)
+# 23 are SRRs from brandishing 
+# dfActions %>% 
+#   mutate(InvestigationYear = substr(Filename, 1, 4)) %>% 
+#   count(InvestigationYear, "asdf" = is.na(NewOrOldForm)) %>% 
+#   pivot_wider(names_from = asdf, values_from = n) %>% 
+#   rowwise() %>% 
+#   mutate(PercentBlank = `TRUE` / sum(`TRUE`, `FALSE`))
+# dfFlat %>% filter(grepl("Brandishing", x = TacticsUsed)) %>% count(SubjectActions)
+
+dfActions <- dfFlat %>%
+  dplyr::select(Filename, SubjectActions) %>%
+  mutate(
+    NewOrOldForm = case_when(
+      grepl(x = SubjectActions, 
+          pattern = "Active Resistance|Armed Resistance|Passive Resistance") ~ "Old Form",
+      grepl(x = SubjectActions, 
+            pattern = "Assaultive|Avoiding Custody|Imminent") ~ "New Form"
+      )
+    ) %>%
+  mutate(
+    AvoidingCustody = case_when(
+      grepl(x = SubjectActions, "Avoiding Custody") ~ 1,
+      TRUE ~ 0),
+    Assaultive = case_when(
+      grepl(x = SubjectActions, "Assaultive") ~ 1,
+      TRUE ~ 0),
+    ImminentThreat = case_when(
+      grepl(x = SubjectActions, "Imminent") ~ 1,
+      TRUE ~ 0)
+    )
+
+# library(ggtern)
+
+ternaryAxes <- tibble(
+  Avoiding = c(1, 0, 1, 1, 1, 0, 0),
+  Assaultive = c(0, 1, 1, 1, 0, 1, 0),
+  ImminentThreat = c(1, 1, 1, 0, 0, 0, 1),
+  x = c(1, 50, 50, 50, 1, 100, 1), 
+  y = c(50, 1, 50, 50, 100, 1, 1), 
+  z = c(50, 50, 50, 1, 1, 1, 100), 
+  label = c("Imminent + Avoiding", 
+            "Assaultive + Imminent", 
+            "Avoiding + Assaultive + Imminent",
+            "Avoiding + Assaultive",
+            "Avoiding",
+            "Assaultive",
+            "Imminent")) 
+
+ternaryDF <- dfActions %>%
+  filter(NewOrOldForm == "New Form") %>%
+  left_join(
+    ternaryAxes,
+    by = c("AvoidingCustody" = "Avoiding",
+           "Assaultive" = "Assaultive",
+           "ImminentThreat" = "ImminentThreat")
+  )
+
+behaviorPlot <- ternaryDF %>% 
+  plot_ly(
+    type = "scatterternary", 
+    mode = "markers", 
+    a = ~jitter(x), 
+    b = ~jitter(y), 
+    c = ~jitter(z), 
+    text = ~paste0(SubjectActions, "<br>", Filename), 
+    hoverinfo = "text") %>%
+  layout(
+    title = "",
+    ternary = list(
+      aaxis = list(title = "Avoiding Custody", showgrid = FALSE, showticklabels = FALSE),
+      baxis = list(title = "Assaultive Behavior", showgrid = FALSE, showticklabels = FALSE),
+      caxis = list(title = "Imminent Threat", showgrid = FALSE, showticklabels = FALSE)
+    )
+  )
+
+scaledBehaviorPlot <- browsable(div(style = "width:100%; height = 200px", behaviorPlot))
+save_html(html = scaledBehaviorPlot, file = "scaledBehaviorPlot.html", libdir = "htmlLibs")
+
+behaviorPlot
+
+```
+
+This ternary plot displays a single point for each SRR. Officers list the subject behavior leading up to the use of force on the SRR and choose between "Avoiding Custody", "Assaultive Behavior" and "Imminent Threat." Because there are three non-exclusive choices to choose from, we can display this information in a ternary plot. Dots in the middle of the triangle represent SRRs with all three subject actions checked off; otherwise the dot is placed in a corner representing an SRR with only one subject action checked, or the side of the triangle between two corners indicating both of those actions were checked off.
+
+## Date/Time
+
+The hosted flat file also includes dates and times of use of force incidents. When we look at dates and times, as mapped out below, we see several patterns. First, we can see an immediate drop of use of forces at the 3:00 a.m. hour. This is almost certainly related to bar closing incidents, as 2:00 a.m. is the mandatory closing time for alcohol-serving establishments in Monroe County, resulting in numerous use of force incidents between 2AM and 2:59AM as intoxicated bar patrons leave bars.  The number of use of force incidents at 2:00 a.m. suggests that [interventions designed to reduce assaults at bars](https://www.ojp.gov/ncjrs/virtual-library/abstracts/assaults-and-around-bars-2nd-edition) may also have a positive spillover effect by reducing police uses of force. 
+
+
+```{r time}
+
+# likely small discrepency from published toolkit which used dates/times from matched crime reports; dfFlat uses date/times from SRRs (OCRed).
+
+srrTimes <- dfFlat %>%
+  mutate(
+    padTime = str_pad(string = Time, width = 4, side = "left", pad = 0),
+    Hour = str_sub(string = padTime, start = 1, end = 2) %>% as.numeric()) %>%
+  filter(! is.na(Hour)) %>%
+  group_by(Hour) %>%
+  count(name = "SRRs")
+
+timePlot <- srrTimes %>%
+  plot_ly(
+    type = "barpolar",
+    r = ~SRRs,
+    theta = ~Hour * 15,
+    hoverinfo = "text",
+    text = ~paste0(SRRs, " SRRs at hour ", Hour)
+  ) %>%
+  layout(
+    polar = list(
+      angularaxis = list(
+        rotation = 90,
+        direction = "clockwise",
+        tickmode = "array",
+        ticktext = c("Midnight", "6 AM", "Noon", "6PM"),
+        tickvals = c(0, 90, 180, 270)
+      ),
+      radialaxis = list(
+        visible = FALSE
+      )
+    )
+  )
+
+scaledTimePlot <- browsable(div(style = "width:100%; height = 200px", timePlot))
+save_html(html = scaledTimePlot, file = "scaledTimePlot.html", libdir = "htmlLibs")
+
+timePlot
+
+```
+
+
+In addition to the time of day pattern, we can also find a date-related pattern. In September 2020, Rochester learned of the death of Daniel Prude, who had died in RPD custody in March of that year. Following this revelation, September 2020 saw multiple large protests, some of which included rocks and fireworks thrown toward police and police use of pepper spray, pepperball launching systems, and tear gas. Thus, the dates of those protests have many more SRRs than any other dates within our dataset. There was an additional protest in May 2020, related to the George Floyd murder in Minneapolis, which also led to a large number of SRRs. Finally, the 23 SRRs on August 18, 2019, reflect a riot during bar closing hours at a local bar district. The trend line shows that since those protest-related outlier days, use of force incidents is trending back down again.
+
+
+```{r date}
+
+srrDates <- tibble(Date = seq.Date(from = as.Date("2016-06-06"), to = as.Date("2021-06-07"), by = "day")) %>%
+  left_join(
+    dfFlat %>% 
+      filter(! is.na(Date)) %>%
+      distinct(Filename, Date) %>%
+      group_by(Date = as.Date(Date)) %>%
+      count(),
+    by = c("Date" = "Date")
+  ) %>%
+  replace_na(replace = list("n" = 0))
+
+segreg <- glm(data = srrDates, formula = n ~ Date) %>% 
+  segmented::segmented.glm(obj = ., seg.z = ~ Date)
+
+# segmented regression shows a single breakpoint which makes sense
+
+srrDatesFitted <- srrDates %>%
+  bind_cols(Fitted = fitted(segreg))
+
+datePlot <- srrDatesFitted %>%
+  plot_ly(
+    type = "scatter",
+    mode = "markers",
+    x = ~Date,
+    y = ~n,
+    opacity = .33,
+    name = "Count per day",
+    text = ~paste0(n, " SRRs on ", Date),
+    hoverinfo = "text"
+  ) %>%
+  add_trace(
+    #y = ~predict(loess(formula = n ~ rownames(srrDates), span = .5)),
+    y = ~Fitted,
+    mode = "line",
+    name = "Trend",
+    hoverinfo = "name"
+    ) %>%
+  layout(
+    legend = list(orientation = "h"),
+    yaxis = list(title = "SRRs / day")
+  )
+
+scaledDatePlot <- browsable(div(style = "width:100%; height = 200px", datePlot))
+save_html(html = scaledDatePlot, file = "scaledDatePlot.html", libdir = "htmlLibs")
+
+datePlot
+
+```
+
+
+
+
