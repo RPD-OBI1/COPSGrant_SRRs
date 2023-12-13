@@ -311,6 +311,45 @@ datePlot
 
 ```
 
+With 22 different columns, there are hundreds of different ways to analyze this dataset. And since the data includes a Crime Report number, users can also join it with other datasets on the RPD Open Data Portal, such as the Part I [crimes dataset](https://data-rpdny.opendata.arcgis.com/datasets/0369d81aa8f54fd4afbb23a50a550149_0/explore). Note that only a subset of the uses of force coincide with Part I crimes, so the majority of uses of force will not match to Part I crime incidents. Below is sample code to assist users with joining Part I crimes to the uses of force.
+
+Researchers and other users who plan on using these datasets are welcome to [contact us](https://data-rpdny.opendata.arcgis.com/pages/feedback) for any assistance they might need.
+
+```{r opendata}
+
+openDataPortalCrime <- function(wherequery = '1=1') {
+    
+    # query the RPD Open Data Portal, Part I crimes (2011 to present) layer
+    
+    library(tidyverse)
+    library(httr)
+    library(jsonlite)
+    options(stringsAsFactors = FALSE)
+    renameFunc <- function(string) { gsub(pattern = "properties.", replacement = "", x = string) }
+    
+    # this gets all records, no querying
+    results <- GET("https://opendata.arcgis.com/datasets/74c62e65e3b347e289a07d02d4b8c899_3.geojson") %>%
+        content("text") %>%
+        fromJSON(flatten = TRUE) %>%
+        .$features %>%
+        rename_all(.funs = funs(renameFunc(.))) %>%
+        mutate(OccurredFrom_Timestamp = as.POSIXct(OccurredFrom_Timestamp, tz = "UTC", format = "%Y-%m-%dT%T.000Z"),
+               OccurredThrough_Timestamp = as.POSIXct(OccurredThrough_Timestamp, tz = "UTC", format = "%Y-%m-%dT%T.000Z"),
+               Reported_Timestamp = as.POSIXct(Reported_Timestamp, tz = "UTC", format = "%Y-%m-%dT%T.000Z")) %>%
+        mutate_if(.predicate = is.character, .funs = trimws)
+    return(results)
+    
+}
+
+dfOpenData <- openDataPortalCrime() %>%
+  mutate(
+    CR = paste0(
+      substr(Case_Number, 3, 5),
+      substr(Case_Number, 8, 13)
+    )
+  ) %>%
+  right_join(dfFlat, by = "CR")
 
 
 
+```
